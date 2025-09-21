@@ -1,0 +1,71 @@
+services:
+  # Database service
+  postgres:
+    image: postgres:15-alpine
+    container_name: ai-hedge-fund-db
+    environment:
+      POSTGRES_USER: ${DB_USER:-hedge_fund}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-hedge_fund_password}
+      POSTGRES_DB: ${DB_NAME:-hedge_fund_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-hedge_fund}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend service from GitHub Container Registry
+  backend:
+    image: ghcr.io/${GITHUB_REPOSITORY:-ai-hedge-fund/ai-hedge-fund}-backend:latest
+    container_name: ai-hedge-fund-backend
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-hedge_fund}:${DB_PASSWORD:-hedge_fund_password}@postgres:5432/${DB_NAME:-hedge_fund_db}
+      - PYTHONUNBUFFERED=1
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
+      "
+
+  # Frontend service from GitHub Container Registry
+  frontend:
+    image: ghcr.io/${GITHUB_REPOSITORY:-ai-hedge-fund/ai-hedge-fund}-frontend:latest
+    container_name: ai-hedge-fund-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Ollama service for local LLMs
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ai-hedge-fund-ollama
+    profiles:
+      - with-ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  ollama_data:
+
+networks:
+  default:
+    name: ai-hedge-fund-network
